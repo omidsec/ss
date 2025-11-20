@@ -9,7 +9,7 @@ if($mysqli->connect_error){
 $db = isset($_GET['db']) ? $_GET['db'] : '';
 $table = isset($_GET['table']) ? $_GET['table'] : '';
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$per_page = 100; // rows per page
+$per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 100; // default 100
 $offset = ($page-1)*$per_page;
 
 // --- Handle update of a cell ---
@@ -38,6 +38,7 @@ td, th { border: 1px solid #ccc; padding: 5px; text-align: left; }
 td.editable { cursor: pointer; background-color: #f9f9f9; }
 .pagination a { margin: 0 5px; text-decoration: none; }
 .pagination a.current { font-weight: bold; }
+.rows-per-page { margin: 10px 0; }
 </style>
 <script>
 function editCell(td, db, table, column, id_value, pk){
@@ -64,6 +65,13 @@ function editCell(td, db, table, column, id_value, pk){
                  "&id="+encodeURIComponent(id_value)+
                  "&value="+encodeURIComponent(value));
     }
+}
+function changePerPage(){
+    var perPage = document.getElementById('per_page_input').value;
+    var url = new URL(window.location.href);
+    url.searchParams.set('per_page', perPage);
+    url.searchParams.set('page', 1); // reset to first page
+    window.location.href = url.toString();
 }
 </script>
 </head>
@@ -94,6 +102,9 @@ elseif($db != '' && $table==''){
 elseif($db != '' && $table != ''){
     echo "<h3>Database: $db | Table: $table</h3>";
     $mysqli->select_db($db);
+
+    // Rows per page input
+    echo "<div class='rows-per-page'>Rows per page: <input type='number' id='per_page_input' value='$per_page' min='1' style='width:70px;'> <button onclick='changePerPage()'>Set</button></div>";
 
     // Fetch primary key
     $pk = '';
@@ -139,12 +150,12 @@ elseif($db != '' && $table != ''){
     $total_pages = ceil($total_rows/$per_page);
 
     echo "<div class='pagination'>";
-    if($page>1) echo "<a href='?db=$db&table=$table&page=".($page-1)."'>Prev</a>";
+    if($page>1) echo "<a href='?db=$db&table=$table&page=".($page-1)."&per_page=$per_page'>Prev</a>";
     for($p=1; $p<=$total_pages; $p++){
         $class = ($p==$page) ? "current" : "";
-        echo "<a class='$class' href='?db=$db&table=$table&page=$p'>$p</a>";
+        echo "<a class='$class' href='?db=$db&table=$table&page=$p&per_page=$per_page'>$p</a>";
     }
-    if($page<$total_pages) echo "<a href='?db=$db&table=$table&page=".($page+1)."'>Next</a>";
+    if($page<$total_pages) echo "<a href='?db=$db&table=$table&page=".($page+1)."&per_page=$per_page'>Next</a>";
     echo "</div>";
 
     echo "<br><a href='?db=$db'>Back to tables</a> | <a href='?'>Back to databases</a>";
