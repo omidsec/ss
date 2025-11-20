@@ -8,6 +8,9 @@ if($mysqli->connect_error){
 // --- Handle DB / Table selection ---
 $db = isset($_GET['db']) ? $_GET['db'] : '';
 $table = isset($_GET['table']) ? $_GET['table'] : '';
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$per_page = 100; // rows per page
+$offset = ($page-1)*$per_page;
 
 // --- Handle update of a cell ---
 if(isset($_POST['update'])){
@@ -29,9 +32,12 @@ if(isset($_POST['update'])){
 <head>
 <title>PHP MySQL Explorer</title>
 <style>
-table { border-collapse: collapse; margin-top: 10px; }
-td, th { border: 1px solid #ccc; padding: 5px; }
+body { font-family: Arial, sans-serif; }
+table { border-collapse: collapse; margin-top: 10px; width: 100%; }
+td, th { border: 1px solid #ccc; padding: 5px; text-align: left; }
 td.editable { cursor: pointer; background-color: #f9f9f9; }
+.pagination a { margin: 0 5px; text-decoration: none; }
+.pagination a.current { font-weight: bold; }
 </style>
 <script>
 function editCell(td, db, table, column, id_value, pk){
@@ -96,7 +102,7 @@ elseif($db != '' && $table != ''){
         $pk = $row_pk['Column_name'];
     }
     if($pk==''){
-        echo "<p><b>Error:</b> Table has no primary key. Editing is disabled.</p>";
+        echo "<p><b>Warning:</b> Table has no primary key. Editing is disabled.</p>";
     }
 
     // Fetch columns
@@ -106,8 +112,8 @@ elseif($db != '' && $table != ''){
         $columns[] = $row['Field'];
     }
 
-    // Fetch data (limit 100 rows for safety)
-    $res = $mysqli->query("SELECT * FROM `$table` LIMIT 100");
+    // Fetch data with LIMIT for pagination
+    $res = $mysqli->query("SELECT * FROM `$table` LIMIT $offset, $per_page");
 
     echo "<table><tr>";
     foreach($columns as $col) echo "<th>$col</th>";
@@ -116,7 +122,7 @@ elseif($db != '' && $table != ''){
     while($row = $res->fetch_assoc()){
         echo "<tr>";
         foreach($columns as $col){
-            if($pk!=''){
+            if($pk != ''){
                 $id_value = $row[$pk];
                 echo "<td class='editable' ondblclick='editCell(this,\"$db\",\"$table\",\"$col\",\"$id_value\",\"$pk\")'>".$row[$col]."</td>";
             } else {
@@ -126,6 +132,21 @@ elseif($db != '' && $table != ''){
         echo "</tr>";
     }
     echo "</table>";
+
+    // --- Pagination Links ---
+    $res_count = $mysqli->query("SELECT COUNT(*) as total FROM `$table`");
+    $total_rows = $res_count->fetch_assoc()['total'];
+    $total_pages = ceil($total_rows/$per_page);
+
+    echo "<div class='pagination'>";
+    if($page>1) echo "<a href='?db=$db&table=$table&page=".($page-1)."'>Prev</a>";
+    for($p=1; $p<=$total_pages; $p++){
+        $class = ($p==$page) ? "current" : "";
+        echo "<a class='$class' href='?db=$db&table=$table&page=$p'>$p</a>";
+    }
+    if($page<$total_pages) echo "<a href='?db=$db&table=$table&page=".($page+1)."'>Next</a>";
+    echo "</div>";
+
     echo "<br><a href='?db=$db'>Back to tables</a> | <a href='?'>Back to databases</a>";
 }
 ?>
