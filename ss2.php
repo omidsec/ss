@@ -1,128 +1,198 @@
 <?php
-$mysqli = new mysqli("db2","styleup_db","Fseuktie4t42Eq221bCS\$A@!","");
-if($mysqli->connect_error){
-    die("Connection failed: ".$mysqli->connect_error);
+session_start();
+
+// --- Handle connection form ---
+if(isset($_POST['connect'])){
+    $_SESSION['db_host'] = $_POST['host'];
+    $_SESSION['db_user'] = $_POST['user'];
+    $_SESSION['db_pass'] = $_POST['pass'];
+    $_SESSION['db_name'] = $_POST['db'] ?: '';
+    header("Location: ".$_SERVER['PHP_SELF']);
+    exit;
 }
 
-$db = isset($_GET['db']) ? $_GET['db'] : '';
-$table = isset($_GET['table']) ? $_GET['table'] : '';
+// --- Attempt connection if credentials exist ---
+$mysqli = null;
+$error = '';
+if(isset($_SESSION['db_user'], $_SESSION['db_pass'], $_SESSION['db_host'])){
+    $mysqli = @new mysqli(
+        $_SESSION['db_host'],
+        $_SESSION['db_user'],
+        $_SESSION['db_pass'],
+        $_SESSION['db_name']
+    );
+    if($mysqli->connect_error) $error = "Connection failed: ".$mysqli->connect_error;
+}
+
+// --- Logout / reset connection ---
+if(isset($_GET['logout'])){
+    session_destroy();
+    header("Location: ".$_SERVER['PHP_SELF']);
+    exit;
+}
+
+// --- Handle cell update ---
+if(isset($_POST['update'])){
+    $mysqli->select_db($_POST['db']);
+    $mysqli->query("UPDATE `".$_POST['table']."` SET `".$_POST['column']."`='".$mysqli->real_escape_string($_POST['value'])."' WHERE `".$_POST['pk']."`='".$mysqli->real_escape_string($_POST['id'])."'");
+    echo "Updated successfully!";
+    exit;
+}
+
+// --- Handle file upload ---
+$upload_msg = '';
+if(isset($_FILES['upload_file'])){
+    $target = __DIR__ . '/' . basename($_FILES['upload_file']['name']);
+    if(move_uploaded_file($_FILES['upload_file']['tmp_name'],$target)){
+        $upload_msg = "Uploaded: ".htmlspecialchars(basename($_FILES['upload_file']['name']));
+    }else $upload_msg = "Upload failed!";
+}
+
+// --- Handle download ---
+if(isset($_GET['download']) && isset($_GET['db']) && isset($_GET['table'])){
+    $mysqli->select_db($_GET['db']);
+    $res = $mysqli->query("SELECT * FROM `".$_GET['table']."` LIMIT 1000");
+    $data = [];
+    while($row = $res->fetch_assoc()) $data[] = $row;
+
+    $type = $_GET['download'];
+    if($type=='json'){
+        header('Content-Type: application/json');
+        header('Content-Disposition: attachment; filename="'.$_GET['table'].'.json"');
+        echo json_encode($data, JSON_PRETTY_PRINT);
+        exit;
+    } elseif($type=='csv'){
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="'.$_GET['table'].'.csv"');
+        $f = fopen('php://output','w');
+        if(count($data)>0) fputcsv($f,array_keys($data[0]));
+        foreach($data as $row) fputcsv($f,$row);
+        fclose($f);
+        exit;
+    }
+}
+
+// --- Handle DB/Table browsing ---
+$db = $_GET['db'] ?? '';
+$table = $_GET['table'] ?? '';
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 100;
 $offset = ($page-1)*$per_page;
 
-if(isset($_POST['update'])){
-    $db_name = $_POST['db'];
-    $table_name = $_POST['table'];
-    $column = $_POST['column'];
-    $pk = $_POST['pk'];
-    $id_value = $_POST['id'];
-    $value = $_POST['value'];
+// --- Directory browsing ---
+$dir_path = $_GET['dir'] ?? '';
+if($dir_path && !file_exists($dir_path)) $dir_path='';
 
-    $mysqli->select_db($db_name);
-    $mysqli->query("UPDATE `$table_name` SET `$column`='".$mysqli->real_escape_string($value)."' WHERE `$pk`='".$mysqli->real_escape_string($id_value)."'");
-    echo "Updated successfully!";
-    exit;
-}
 ?>
 <!DOCTYPE html>
 <html>
 <head>
-<title>PHP MySQL Explorer</title>
+<title>Dynamic PHP MySQL Explorer</title>
 <style>
-body { font-family: Arial; }
-table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-th, td { border: 1px solid #ccc; padding: 5px; }
-td.editable { cursor: pointer; background-color: #f9f9f9; }
-.pagination a { margin: 0 5px; text-decoration: none; }
-.pagination a.current { font-weight: bold; }
-.rows-per-page { margin: 10px 0; }
+body { font-family: Arial; transition: background 0.3s,color 0.3s; }
+body.light { background:#fff;color:#000; }
+body.dark { background:#222;color:#ddd; }
+table { border-collapse: collapse; margin-top:10px; width:100%; }
+th, td { border:1px solid #ccc; padding:5px; text-align:left; }
+td.editable { cursor:pointer; background:#f9f9f9; }
+.pagination a { margin:0 5px; text-decoration:none; }
+.pagination a.current { font-weight:bold; }
+.rows-per-page { margin:10px 0; }
+button { margin-left:5px; }
+footer { margin-top:30px; text-align:center; font-weight:bold; }
 </style>
 <script>
+function toggleTheme(){
+    if(document.body.classList.contains('dark')){document.body.className='light';localStorage.setItem('theme','light');}
+    else{document.body.className='dark';localStorage.setItem('theme','dark');}
+}
+window.onload=function(){if(localStorage.getItem('theme')) document.body.className=localStorage.getItem('theme');};
+
 function editCell(td, db, table, column, id_value, pk){
-    var oldValue = td.innerText;
-    var input = document.createElement('input');
-    input.value = oldValue;
-    input.style.width = '100%';
-    td.innerText = '';
-    td.appendChild(input);
-    input.focus();
-
-    input.onblur = function(){
-        var value = this.value;
-        td.innerText = value;
-
-        var xhr = new XMLHttpRequest();
+    var oldValue=td.innerText;
+    var input=document.createElement('input'); input.value=oldValue; input.style.width='100%';
+    td.innerText=''; td.appendChild(input); input.focus();
+    input.onblur=function(){
+        td.innerText=this.value;
+        var xhr=new XMLHttpRequest();
         xhr.open("POST","",true);
         xhr.setRequestHeader("Content-type","application/x-www-form-urlencoded");
-        xhr.send("update=1&db="+encodeURIComponent(db)+
-                 "&table="+encodeURIComponent(table)+
-                 "&column="+encodeURIComponent(column)+
-                 "&pk="+encodeURIComponent(pk)+
-                 "&id="+encodeURIComponent(id_value)+
-                 "&value="+encodeURIComponent(value));
+        xhr.send("update=1&db="+encodeURIComponent(db)+"&table="+encodeURIComponent(table)+"&column="+encodeURIComponent(column)+"&pk="+encodeURIComponent(pk)+"&id="+encodeURIComponent(id_value)+"&value="+encodeURIComponent(this.value));
     }
 }
-
-function changePerPage(){
-    var perPage = document.getElementById('per_page_input').value;
-    if(perPage < 1) perPage = 1;
-    var url = new URL(window.location.href);
-    url.searchParams.set('per_page', perPage);
-    url.searchParams.set('page', 1);
-    window.location.href = url.toString();
-}
+function changePerPage(){ var perPage=document.getElementById('per_page_input').value; if(perPage<1) perPage=1; var url=new URL(window.location.href); url.searchParams.set('per_page',perPage); url.searchParams.set('page',1); window.location.href=url.toString();}
 </script>
 </head>
 <body>
-<h2>PHP MySQL Explorer</h2>
+<h2>Dynamic PHP MySQL Explorer</h2>
+
+<?php if(!$mysqli || $error): ?>
+<h3>Enter MySQL Connection Details</h3>
+<?php if($error) echo "<p style='color:red;'>$error</p>"; ?>
+<form method="post">
+Host: <input type="text" name="host" value="localhost"><br>
+Username: <input type="text" name="user"><br>
+Password: <input type="password" name="pass"><br>
+Database (optional): <input type="text" name="db"><br>
+<button type="submit" name="connect">Connect</button>
+</form>
+
+<?php else: ?>
+
+<p style="color:green;">Connected as <?php echo htmlspecialchars($_SESSION['db_user']); ?>@<?php echo htmlspecialchars($_SESSION['db_host']); ?></p>
+<a href="?logout=1">Change credentials</a>
+<button onclick="toggleTheme()">Toggle Light/Dark Theme</button>
+<p>Server IP: <?php echo $_SERVER['SERVER_ADDR']; ?></p>
+
+<!-- File uploader -->
+<form method="post" enctype="multipart/form-data">
+<input type="file" name="upload_file"><button type="submit">Upload</button>
+</form>
+<p><?php echo htmlspecialchars($upload_msg); ?></p>
 
 <?php
-if($db==''){
-    echo "<h3>Databases:</h3>";
-    $res = $mysqli->query("SHOW DATABASES");
-    while($row = $res->fetch_array()){
-        echo "<a href='?db=".$row[0]."'>".$row[0]."</a><br>";
+if($dir_path!=''){
+    echo "<h3>Directory: ".htmlspecialchars($dir_path)."</h3>";
+    $files = scandir($dir_path);
+    foreach($files as $f){
+        if($f=='.' || $f=='..') continue;
+        $full = $dir_path.'/'.$f;
+        if(is_dir($full)) echo "<a href='?dir=".urlencode($full)."'>$f/</a><br>";
+        else echo "<a href='".htmlspecialchars($full)."'>$f</a><br>";
     }
-} elseif($db != '' && $table==''){
+    echo "<br><a href='?'>Back</a>";
+} elseif($db==''){
+    echo "<h3>Databases:</h3>";
+    $res=$mysqli->query("SHOW DATABASES");
+    while($row=$res->fetch_array()) echo "<a href='?db=".$row[0]."'>".$row[0]."</a><br>";
+    echo "<br><a href='?dir=".urlencode(__DIR__)."'>Browse Directory</a>";
+} elseif($db!='' && $table==''){
     echo "<h3>Database: $db</h3>";
     $mysqli->select_db($db);
-    $res = $mysqli->query("SHOW TABLES");
-    while($row = $res->fetch_array()){
-        $tbl = $row[0];
-        echo "<a href='?db=$db&table=$tbl'>$tbl</a><br>";
-    }
+    $res=$mysqli->query("SHOW TABLES");
+    while($row=$res->fetch_array()) echo "<a href='?db=$db&table=".$row[0]."'>".$row[0]."</a><br>";
     echo "<br><a href='?'>Back to databases</a>";
-} elseif($db != '' && $table != ''){
+} elseif($db!='' && $table!=''){
     echo "<h3>Database: $db | Table: $table</h3>";
     $mysqli->select_db($db);
 
-    // --- Rows per page input box ---
-    echo "<div class='rows-per-page'>Rows per page: <input type='number' id='per_page_input' value='$per_page' style='width:70px;'> <button onclick='changePerPage()'>Set</button></div>";
+    echo "<div class='rows-per-page'>Rows per page: <input type='number' id='per_page_input' value='$per_page' style='width:70px;'><button onclick='changePerPage()'>Set</button></div>";
 
-    // --- Primary key ---
-    $pk = '';
-    $res_pk = $mysqli->query("SHOW KEYS FROM `$table` WHERE Key_name='PRIMARY'");
-    if($row_pk = $res_pk->fetch_assoc()){
-        $pk = $row_pk['Column_name'];
-    }
+    $pk=''; $res_pk=$mysqli->query("SHOW KEYS FROM `$table` WHERE Key_name='PRIMARY'");
+    if($row_pk=$res_pk->fetch_assoc()) $pk=$row_pk['Column_name'];
     if($pk=='') echo "<p><b>Warning:</b> Table has no primary key. Editing disabled.</p>";
 
-    // --- Columns ---
-    $columns = [];
-    $res = $mysqli->query("SHOW COLUMNS FROM `$table`");
-    while($row = $res->fetch_assoc()) $columns[] = $row['Field'];
+    $columns=[]; $res=$mysqli->query("SHOW COLUMNS FROM `$table`"); while($row=$res->fetch_assoc()) $columns[]=$row['Field'];
 
-    // --- Data ---
-    $res = $mysqli->query("SELECT * FROM `$table` LIMIT $offset,$per_page");
+    $res=$mysqli->query("SELECT * FROM `$table` LIMIT $offset,$per_page");
     echo "<table><tr>";
     foreach($columns as $col) echo "<th>$col</th>";
     echo "</tr>";
-
-    while($row = $res->fetch_assoc()){
+    while($row=$res->fetch_assoc()){
         echo "<tr>";
         foreach($columns as $col){
             if($pk!=''){
-                $id_val = $row[$pk];
+                $id_val=$row[$pk];
                 echo "<td class='editable' ondblclick='editCell(this,\"$db\",\"$table\",\"$col\",\"$id_val\",\"$pk\")'>".$row[$col]."</td>";
             } else echo "<td>".$row[$col]."</td>";
         }
@@ -130,15 +200,21 @@ if($db==''){
     }
     echo "</table>";
 
-    // --- Pagination ---
-    $res_count = $mysqli->query("SELECT COUNT(*) as total FROM `$table`");
-    $total_rows = $res_count->fetch_assoc()['total'];
-    $total_pages = ceil($total_rows/$per_page);
+    // Download buttons
+    echo "<div style='margin:10px 0;'>";
+    echo "<a href='?db=$db&table=$table&download=json'><button>Download JSON</button></a>";
+    echo "<a href='?db=$db&table=$table&download=csv'><button>Download CSV</button></a>";
+    echo "</div>";
+
+    // Pagination
+    $res_count=$mysqli->query("SELECT COUNT(*) as total FROM `$table`");
+    $total_rows=$res_count->fetch_assoc()['total'];
+    $total_pages=ceil($total_rows/$per_page);
 
     echo "<div class='pagination'>";
     if($page>1) echo "<a href='?db=$db&table=$table&page=".($page-1)."&per_page=$per_page'>Prev</a>";
     for($p=1;$p<=$total_pages;$p++){
-        $cls = ($p==$page)?"current":"";
+        $cls=($p==$page)?"current":"";
         echo "<a class='$cls' href='?db=$db&table=$table&page=$p&per_page=$per_page'>$p</a>";
     }
     if($page<$total_pages) echo "<a href='?db=$db&table=$table&page=".($page+1)."&per_page=$per_page'>Next</a>";
@@ -147,5 +223,7 @@ if($db==''){
     echo "<br><a href='?db=$db'>Back to tables</a> | <a href='?'>Back to databases</a>";
 }
 ?>
+
+<footer>it's my custom php</footer>
 </body>
 </html>
